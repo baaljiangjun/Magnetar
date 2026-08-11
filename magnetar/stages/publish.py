@@ -94,8 +94,8 @@ def _publish_huggingface(pkg: Path, repo_name: str, token: str | None,
 license: apache-2.0
 pipeline_tag: image-classification
 tags:
-- axmodel
-- axera
+- om
+- hi3516cv610
 - {model_name}
 ---
 """

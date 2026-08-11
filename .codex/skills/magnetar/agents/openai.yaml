@@ -1,4 +1,4 @@
 interface:
   display_name: "Magnetar"
-  short_description: "Convert models to AXMODEL SDK packages"
-  default_prompt: "Use $magnetar to convert SOURCE to an AXMODEL package with Python and C++ SDKs."
+  short_description: "Convert CV models to Hi3516CV610 OM packages"
+  default_prompt: "Use $magnetar to convert SOURCE to a Hi3516CV610 OM package with MindCmd validation and an SVP_ACL C++ integration."

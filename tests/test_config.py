@@ -9,7 +9,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from magnetar.config import load_task_config  # noqa: E402
+from magnetar.config import load_task_config, require_serial_config  # noqa: E402
 
 
 class TaskConfigTest(unittest.TestCase):
@@ -17,7 +17,7 @@ class TaskConfigTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         (self.root / ".magnetarrc").write_text(
-            "SOURCE=global\nTARGET_HARDWARE=AX650\nHF_ENDPOINT=https://hf-mirror.com\n",
+            "SOURCE=global\nTARGET_HARDWARE=Hi3516CV610\nHF_ENDPOINT=https://hf-mirror.com\n",
             encoding="utf-8",
         )
         self.task = self.root / "tasks" / "task_a"
@@ -28,12 +28,12 @@ class TaskConfigTest(unittest.TestCase):
 
     def test_snapshot_wins_over_global_rc(self):
         (self.task / "config.json").write_text(
-            json.dumps({"SOURCE": "task_a", "TARGET_HARDWARE": "AX630C"}),
+            json.dumps({"SOURCE": "task_a", "TARGET_HARDWARE": "Hi3516CV610"}),
             encoding="utf-8",
         )
         cfg = load_task_config(self.task, project_root=self.root)
         self.assertEqual(cfg["SOURCE"], "task_a")
-        self.assertEqual(cfg["TARGET_HARDWARE"], "AX630C")
+        self.assertEqual(cfg["TARGET_HARDWARE"], "Hi3516CV610")
         # 全局 rc 里任务没有覆盖的键仍回退
         self.assertEqual(cfg["HF_ENDPOINT"], "https://hf-mirror.com")
         self.assertEqual(cfg["TASK_DIR"], str(self.task))
@@ -57,6 +57,18 @@ class TaskConfigTest(unittest.TestCase):
     def test_no_snapshot_falls_back_to_global(self):
         cfg = load_task_config(self.task, project_root=self.root)
         self.assertEqual(cfg["SOURCE"], "global")
+
+    def test_serial_port_is_never_assumed(self):
+        cfg = load_task_config(self.task, project_root=self.root)
+        self.assertEqual(cfg["BOARD_SERIAL_PORT"], "")
+        with self.assertRaisesRegex(ValueError, "询问用户"):
+            require_serial_config(cfg)
+
+    def test_user_selected_serial_port(self):
+        self.assertEqual(
+            require_serial_config({"BOARD_SERIAL_PORT": "COM7", "BOARD_SERIAL_BAUD": "115200"}),
+            ("COM7", 115200),
+        )
 
 
 if __name__ == "__main__":

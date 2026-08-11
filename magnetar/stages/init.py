@@ -16,7 +16,7 @@ def run(config: dict) -> Path:
     mark_stage(
         task_dir, "INIT",
         artifacts={"task_dir": str(task_dir), "config": str(task_dir / "config.json")},
-        summary=f"模型 {config.get('MODEL_NAME', 'N/A')} → {config.get('TARGET_HARDWARE', 'AX650')}",
+        summary=f"模型 {config.get('MODEL_NAME', 'N/A')} → {config.get('TARGET_HARDWARE', 'Hi3516CV610')}",
     )
     (task_dir / "task.md").write_text(textwrap.dedent(f"""\
         # {config.get('MODEL_NAME', 'Model')} Deployment

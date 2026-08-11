@@ -1,62 +1,90 @@
-"""RUNONBOARD: 板端部署和验证。返回 metrics dict，无板子返回 None。"""
-import json, os, re, shutil
-from pathlib import Path
-import numpy as np
+"""RUNONBOARD: deploy a CV610 package through SSH or explicit NFS+serial."""
+from __future__ import annotations
 
-def run(task_dir: Path, sample: np.ndarray, target_hw: str, pwd: str, cpp_binary: Path | None = None) -> dict | None:
-    from magnetar.board_util import ensure_remote_infer, select_board, ssh, scp_to, scp_from
-    board = select_board(target_hw, pwd)
+import json
+import ipaddress
+import os
+import shutil
+from pathlib import Path
+
+from magnetar.board_util import scp_to, select_board, serial_command, serial_ipv4, ssh
+from magnetar.config import load_task_config, require_serial_config
+
+
+def _write_report(out: Path, report: dict, log: str) -> None:
+    (out / "board.log").write_text(log, encoding="utf-8")
+    (out / "runonboard_report.md").write_text(
+        "# CV610 Run On Board Report\n\n" +
+        "\n".join(f"- {k}: `{v}`" for k, v in report.items()) + "\n", encoding="utf-8")
+
+
+def _run_nfs_serial(task_dir: Path, cfg: dict, executable: Path | None, sample) -> tuple[dict, str]:
+    port, baud = require_serial_config(cfg)
+    if executable is None or sample is None:
+        raise ValueError("NFS+串口上板需要显式提供 executable 和 sample")
+    server = str(cfg.get("BOARD_NFS_SERVER", "")).strip()
+    export = str(cfg.get("BOARD_NFS_EXPORT", "")).strip()
+    local_root_value = str(cfg.get("BOARD_NFS_LOCAL_ROOT", "")).strip()
+    local_root = Path(local_root_value) if local_root_value else None
+    mount = str(cfg.get("BOARD_NFS_MOUNT", "/mnt/nfs")).strip()
+    if not server or not export or local_root is None:
+        raise ValueError("NFS+串口需要 BOARD_NFS_SERVER/EXPORT/LOCAL_ROOT")
+    board_ip, prefix = serial_ipv4(port, baud)
+    if ipaddress.ip_address(server) not in ipaddress.ip_network(f"{board_ip}/{prefix}", strict=False):
+        raise RuntimeError(f"NFS服务器 {server} 与板端 {board_ip}/{prefix} 不在同一网段")
+    share = local_root / f"magnetar_{task_dir.name}"
+    share.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(task_dir / "compile" / "model.om", share / "model.om")
+    shutil.copy2(Path(executable), share / "cv610_infer")
+    shutil.copy2(Path(sample), share / "input.bin")
+    remote = f"{mount}/{share.name}"
+    command = (
+        f"mkdir -p {mount}; mount | grep -q ' on {mount} ' || "
+        f"mount -t nfs -o nolock,tcp {server}:{export} {mount}; "
+        f"cp {remote}/cv610_infer /tmp/cv610_infer; chmod +x /tmp/cv610_infer; "
+        f"cd {remote}; /tmp/cv610_infer model.om input.bin"
+    )
+    log = serial_command(port, baud, command, timeout=600)
+    return ({"board": board_ip, "transport": "nfs_serial", "serial": port,
+             "nfs": f"{server}:{export}", "command": command, "status": "ok"}, log)
+
+
+def run(task_dir: Path, sample=None, target_hw: str = "Hi3516CV610",
+        pwd: str = "", executable: Path | None = None, **_ignored) -> dict | None:
+    task_dir = Path(task_dir)
+    cfg = load_task_config(task_dir)
+    out = task_dir / "runonboard"
+    out.mkdir(parents=True, exist_ok=True)
+    transport = str(cfg.get("BOARD_TRANSPORT", "ssh")).lower()
+    if transport == "nfs_serial":
+        report, log = _run_nfs_serial(task_dir, cfg, executable, sample)
+        _write_report(out, report, log)
+        from magnetar.stages.state import mark_stage
+        mark_stage(task_dir, "RUNONBOARD", metrics=report,
+                   summary=f"CV610 board {report['board']} OK via NFS+serial")
+        return report
+    if transport != "ssh":
+        raise ValueError(f"不支持 BOARD_TRANSPORT={transport}")
+    board = select_board(target_hw, pwd or cfg.get("BOARD_PASSWORD", ""), cfg.get("BOARD"))
     if board is None:
         from magnetar.stages.state import mark_stage
-        mark_stage(task_dir, "RUNONBOARD", status="skipped", summary="BOARD 未配置，自动跳过")
+        mark_stage(task_dir, "RUNONBOARD", status="skipped", summary="未配置 CV610 BOARD，跳过上板")
         return None
-    # 上板先确保 ax_remote_infer daemon 已装（18500 不通则静默安装），装后可扫端口发现板子
-    try:
-        ensure_remote_infer(board)
-    except Exception as e:
-        print(f"[RUNONBOARD] ensure_remote_infer 失败（忽略，继续上板）: {e}")
-    rb = task_dir / "runonboard"; rb.mkdir(parents=True, exist_ok=True)
-    in_npy = rb / "input.npy"; in_bin = rb / "input.bin"
-    np.save(in_npy, sample.astype(np.float32)); sample.astype(np.float32).tofile(in_bin)
-    rd = f"/tmp/magnetar_{os.getpid()}"
-    ssh(board, f"rm -rf {rd} && mkdir -p {rd}")
-    scp_to(board, task_dir / "package", f"{rd}/package")
-    scp_to(board, in_npy, f"{rd}/input.npy"); scp_to(board, in_bin, f"{rd}/input.bin")
-    # 按 model_meta 找通用 SDK 入口；找不到回退 legacy mobilenet_sdk
-    pkg_name = "mobilenet_sdk"
-    try:
-        meta = json.loads((task_dir / "package" / "models" / "model_meta.json").read_text(encoding="utf-8"))
-        import re
-        pkg_name = re.sub(r"[^0-9a-zA-Z_]", "_", str(meta.get("model_name", "model")).lower()) + "_sdk"
-    except Exception:
-        pass
-    sdk_entry = f"package/python/{pkg_name}/example.py"
-    if not (task_dir / "package" / "python" / pkg_name / "example.py").is_file():
-        sdk_entry = "package/python/mobilenet_sdk/example.py"
-    py_log = ssh(board, f"cd {rd} && LD_LIBRARY_PATH=/soc/lib PYTHONPATH=$PWD/package/python python3 {sdk_entry} --model package/models/model.axmodel --input input.npy --output-dir py_out", timeout=240, max_tail=200)
-    cpp_log = ""
-    if cpp_binary and cpp_binary.exists():
-        scp_to(board, cpp_binary, f"{rd}/mobilenet_example")
-        ssh(board, f"chmod +x {rd}/mobilenet_example")
-        cpp_log = ssh(board, f"cd {rd} && LD_LIBRARY_PATH=/soc/lib ./mobilenet_example package/models/model.axmodel input.bin cpp_out && ls cpp_out", timeout=240, max_tail=200)
-    scp_from(board, f"{rd}/py_out", rb / "py_out")
-    py_outputs = sorted((rb / "py_out").glob("output_*.npy"))
-    if not py_outputs:
-        # legacy：单输出直接落盘 python_output.npy
-        scp_from(board, f"{rd}/python_output.npy", rb / "python_output.npy")
-        po = np.load(rb / "python_output.npy").astype(np.float32)
+    remote = cfg.get("BOARD_DEPLOY_DIR", f"/tmp/magnetar_cv610_{os.getpid()}")
+    ssh(board, f"mkdir -p {remote}")
+    scp_to(board, task_dir / "compile" / "model.om", f"{remote}/model.om")
+    if executable:
+        scp_to(board, executable, f"{remote}/cv610_infer")
+        ssh(board, f"chmod +x {remote}/cv610_infer")
+        command = cfg.get("BOARD_RUN_COMMAND", f"cd {remote} && ./cv610_infer model.om")
     else:
-        po = np.load(py_outputs[0]).astype(np.float32)
-    from magnetar.stages.simulate import cosine
-    m = {"board": board["host"], "chip_type": board["chip_type"], "python_shape": list(po.shape)}
-    if cpp_binary and cpp_binary.exists():
-        scp_from(board, f"{rd}/cpp_out", rb / "cpp_out")
-        cpp_bins = sorted((rb / "cpp_out").glob("output_*.bin"))
-        co = np.fromfile(cpp_bins[0], dtype=np.float32).reshape(po.shape) if cpp_bins else po
-        m["cpp_shape"] = list(co.shape); m["python_cpp_cosine"] = cosine(po, co)
-        m["python_cpp_mae"] = float(np.mean(np.abs(po - co)))
-    (rb / "runonboard_report.md").write_text("# Run On Board Report\n\n"+"\n".join(f"- {k}: {v}" for k,v in m.items())+f"\n\n## Python Log\n```\n{py_log[-4000:]}\n```\n\n## C++ Log\n```\n{cpp_log[-4000:]}\n```", encoding="utf-8")
-    shutil.copy2(rb / "runonboard_report.md", task_dir / "package" / "reports" / "runonboard_report.md")
+        command = cfg.get("BOARD_RUN_COMMAND")
+        if not command:
+            raise ValueError("需要 executable，或在配置中设置 BOARD_RUN_COMMAND")
+    log = ssh(board, command, timeout=600, max_tail=300)
+    report = {"board": board["host"], "chip_type": board.get("chip_type", "Hi3516CV610"),
+              "command": command, "status": "ok"}
+    _write_report(out, report, log)
     from magnetar.stages.state import mark_stage
-    mark_stage(task_dir, "RUNONBOARD", metrics=m, summary=f"板端 {board['host']} {board['chip_type']}")
-    return m
+    mark_stage(task_dir, "RUNONBOARD", metrics=report, summary=f"CV610 board {board['host']} OK")
+    return report

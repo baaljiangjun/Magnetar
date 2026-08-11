@@ -24,7 +24,7 @@ STAGES_LIST = [
     ("INIT",      "初始化工作目录"),
     ("EXPORT",    "导出静态ONNX"),
     ("TOOLCHAIN", "准备编译工具链"),
-    ("COMPILE",   "Pulsar2 编译"),
+    ("COMPILE",   "ATC 编译"),
     ("SIMULATE",  "仿真精度对分"),
     ("SDK-GEN",   "生成 SDK"),
     ("RUNONBOARD","板端验证"),
@@ -99,7 +99,7 @@ def _infer_completed(task_dir: str, stage_name: str) -> str:
     checks = {
         "ACQUIRE":    "cache/acquire/manifest.json",
         "EXPORT":     "export/model.onnx",
-        "COMPILE":    "compile/model.axmodel",
+        "COMPILE":    "compile/model.om",
         "SIMULATE":   "simulate/simulate_report.md",
         "SDK-GEN":    "sdk/sdk_report.md",
         "RUNONBOARD": "runonboard/runonboard_report.md",
@@ -115,7 +115,7 @@ STAGES = [
     ("INIT", "初始化工作目录", "task.md"),
     ("EXPORT", "导出静态ONNX", "export/model.onnx"),
     ("TOOLCHAIN", "准备编译工具链", None),
-    ("COMPILE", "Pulsar2 编译", "compile/model.axmodel"),
+    ("COMPILE", "ATC 编译", "compile/model.om"),
     ("SIMULATE", "仿真精度对分", "simulate/simulate_report.md"),
     ("SDK-GEN", "生成 SDK", "sdk/sdk_report.md"),
     ("RUNONBOARD", "板端验证", "runonboard/runonboard_report.md"),
@@ -194,7 +194,7 @@ footer {{ margin-top: 32px; padding-top: 16px; border-top: 1px solid #30363d; co
 {details_html}
 
 <footer>
-Magnetar &mdash; AXera AI Model Deployment Pipeline &nbsp;|&nbsp; {generated_at}
+Magnetar &mdash; Hi3516CV610 Model Deployment Pipeline &nbsp;|&nbsp; {generated_at}
 </footer>
 </body>
 </html>"""
@@ -238,14 +238,14 @@ def build_metrics_html(task_dir: str) -> str:
     if os.path.exists(onnx):
         cards.append(_card(f"{os.path.getsize(onnx)/1024/1024:.1f} MB", "ONNX 模型"))
     
-    # AXMODEL size
-    axm = os.path.join(task_dir, "compile/model.axmodel")
-    if os.path.exists(axm):
-        cards.append(_card(f"{os.path.getsize(axm)/1024:.0f} KB", "AXMODEL"))
+    # OM size
+    om = os.path.join(task_dir, "compile/model.om")
+    if os.path.exists(om):
+        cards.append(_card(f"{os.path.getsize(om)/1024:.0f} KB", "OM"))
     
     # Compression ratio
-    if os.path.exists(onnx) and os.path.exists(axm):
-        r = os.path.getsize(onnx) / max(os.path.getsize(axm), 1)
+    if os.path.exists(onnx) and os.path.exists(om):
+        r = os.path.getsize(onnx) / max(os.path.getsize(om), 1)
         cards.append(_card(f"{r:.1f}:1", "压缩比"))
     
     # Cosine
@@ -339,7 +339,7 @@ def _get_detail(task_dir: str, name: str, status: str) -> str:
     
     details = {
         "EXPORT": _file_size(os.path.join(task_dir, "export/model.onnx"), "MB"),
-        "COMPILE": _file_size(os.path.join(task_dir, "compile/model.axmodel"), "KB"),
+        "COMPILE": _file_size(os.path.join(task_dir, "compile/model.om"), "KB"),
         "SIMULATE": _sim_detail(task_dir),
         "RUNONBOARD": _board_detail(task_dir),
         "PACKAGE": _pkg_detail(task_dir),

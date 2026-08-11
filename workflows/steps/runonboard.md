@@ -1,14 +1,11 @@
-# RUNONBOARD（yaml step id: runonboard）
+# RUNONBOARD
 
-- kind: agent；skill: `.codex/skills/magnetar/hidden/runonboard/SKILL.md`
-- depends_on: `sdk_gen`
-- inputs: TASK_DIR / BOARD / BOARD_PASSWORD / TARGET_HARDWARE / model_route
-- outputs: runonboard_report / llm_metrics（TTFT / token 速率 / 内存）
-- skip_condition: BOARD 未提供（缺失不是 STOP）
-- 要点：选板后先 `ensure_remote_infer(board)`（18500 未装自动静默安装）；
-  Python/C++ SDK 板端运行，cosine ≥ 0.98 + 延迟/内存
-- LLM 分支：`install_axllm(board)`（ax-llm install.sh，编译耗时较长）；
-  `serve_axllm(board, compile/llm_model_dir, port)` 启动 OpenAI 兼容服务；
-  板端运行 Python SDK 示例（`validate_chat` 语义验证 ≥3 组 prompt），
-  记录 TTFT（serve 日志）/ 生成 token 数 / token 速率 / 系统内存增量 / CMM 占用
-- 后置：`stage_review_runonboard`（AUTO_APPROVE=true 或无 BOARD 时跳过）→ PACKAGE
+只使用用户明确配置的连接方式：
+
+- SSH 模式：必须配置 `BOARD`，通过 SSH/SCP 部署。
+- NFS + 串口模式：先询问用户板子实际对应的串口号，写入
+  `BOARD_SERIAL_PORT`；禁止默认 COM3，也禁止枚举端口后擅自选择。
+- 串口波特率可建议 115200，但必须允许用户覆盖。
+- 通过串口配置板端 IP，确认与 PC 同网段且双向可达，再挂载 NFS。
+
+缺少所选传输方式的必要参数时暂停并询问用户；不得记为板端验证通过。

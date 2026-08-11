@@ -1,105 +1,51 @@
-# .magnetarrc — Magnetar 模型部署工作流项目配置
-# 复制为 .magnetarrc 并按需修改。
-# Codex 会在启动时读取此文件，已配置的项不再重复提问。
+# Magnetar CV610 configuration
 
-# 多任务并发时：本文件只放公共默认（凭据/工具链/行为选项），任务参数
-# （SOURCE/TARGET_HARDWARE/MODEL_NAME/BOARD/TASK_DIR）在 INIT 阶段固化到
-# 各 TASK_DIR/config.json，后续阶段读 config.json（load_task_config），
-# 不要为了新任务反复修改本文件，避免并发任务互相覆盖。
-
-# ===== 必需参数 =====
-
-# 模型来源: Git 仓库 | HuggingFace repo | 本地目录 | 单文件路径 | 可下载 URL
+# Model source: Git/HuggingFace/ModelScope/local path/URL
 SOURCE=
-
-# 目标芯片: AX650 | AX620E
-TARGET_HARDWARE=AX650
-
-# ===== 板端验证（可选）=====
-# 留空则跳过 RUNONBOARD 阶段
-
-# 板端 SSH 信息，格式 user@host[:port]
-BOARD=
-
-# 板端密码（默认 123456）
-BOARD_PASSWORD=123456
-
-# 扫端口发现板子（可选，环境变量 MAGNETAR_SCAN_SUBNET）：dashboard 不可用/无空闲板时，
-# select_board 回退扫描该网段 18500 端口（默认取 dashboard 所在 /24）
-# MAGNETAR_SCAN_SUBNET=10.126.35.0/24
-
-# ===== 可选参数 =====
-
-# 模型名称（留空则从 SOURCE 自动推断）
 MODEL_NAME=
-
-# 任务工作目录（留空则自动生成 todos/work/<timestamp>-<model>/）
-# 也可通过环境变量 MAGNETAR_TASK_DIR 全局覆盖
+TARGET_HARDWARE=Hi3516CV610
 TASK_DIR=
-
-# SDK 语言: python | cpp | both
 SDK_LANG=both
 
-# ===== Pulsar2 编译环境 =====
+# Host toolchain. Run the matching CANN setenv.sh before Magnetar.
+ATC_BIN=atc
+MINDCMD_BIN=mindcmd
+CV610_SDK_ROOT=
 
-# Pulsar2 Docker 镜像（留空则自动从默认路径获取）
-PULSAR2_IMAGE=
+# musl uses arm-v01c02-linux-musleabi-, glibc uses gnueabi-.
+LIBC=musl
+CROSS_COMPILE=arm-v01c02-linux-musleabi-
 
-# Pulsar2 本地可执行文件路径（留空则使用 Docker）
-PULSAR2_BIN=
+# Optional ATC preprocessing/quantization inputs.
+AIPP_CONFIG=
+QUANT_PARAM_FILE=
+ATC_EXTRA_ARGS=
 
-# ===== LLM / 自回归模型（ax-llm 路由，可选）=====
-# 模型被判定为自回归/类 LLM 时自动走 ax-llm 路径（pulsar2 llm_build2 + axllm），
-# 以下参数仅在需要覆盖默认值时设置：
+# MindCmd input list used for float/funcsim/instsim/board comparison.
+MINDCMD_IMAGE_LIST=
 
-# ax-llm 仓库与分支（板端 axllm 安装源）
-# AX_LLM_REPO=https://github.com/AXERA-TECH/ax-llm.git
-# AX_LLM_BRANCH=axllm
+# Explicit board only; no LAN/serial-port scanning or daemon installation.
+BOARD_TRANSPORT=ssh
+BOARD=
+BOARD_USER=root
+BOARD_PORT=22
+BOARD_PASSWORD=
+BOARD_DEPLOY_DIR=/tmp/magnetar_cv610
+# BOARD_RUN_COMMAND=cd /tmp/magnetar_cv610 && ./cv610_infer model.om
 
-# ax-llm-build 仓库（embedding 处理工具）
-# AX_LLM_BUILD_REPO=https://github.com/AXERA-TECH/ax-llm-build.git
+# Required for NFS + serial. Ask the user; never assume COM3.
+BOARD_SERIAL_PORT=
+BOARD_SERIAL_BAUD=115200
+# BOARD_NFS_SERVER=192.168.104.100
+# BOARD_NFS_EXPORT=/cv610
+# BOARD_NFS_LOCAL_ROOT=D:\nfs
+# BOARD_NFS_MOUNT=/mnt/nfs
 
-# llm_build2 参数
-# LLM_MAX_CONTEXT=1024      # decode 最大 attention 长度
-# LLM_PREFILL_LEN=0         # prefill 总 token 长度
-# LLM_PREFILL_STEP_SIZE=    # 每个 prefill 子图 token 数（如 128）
-# LLM_WEIGHT_TYPE=s8        # s8 | s4 | bf16 | fp16 | fp32（大模型可试 s4）
-# LLM_HIDDEN_STATE_TYPE=bf16  # bf16 | fp16 | fp32
+HF_TOKEN=
+GITHUB_TOKEN=
+GITHUB_ORG=
+HF_ORG=
+HF_ENDPOINT=https://hf-mirror.com
 
-# ===== C++ BSP / 交叉编译器 =====
-
-# AX650 BSP SDK 下载地址（留空使用默认）
-# CXX_BSP_URL=
-
-# AX620E 交叉编译器下载地址（留空使用默认）
-# CXX_BSP_URL=
-
-# ===== HuggingFace 凭据 =====
-
-# 私有模型访问令牌（留空则从环境变量 HF_TOKEN 读取）
-# HF_TOKEN=
-
-# ===== PUBLISH 发布凭据 =====
-
-# GitHub 个人访问令牌（留空则从环境变量 GITHUB_TOKEN 读取）
-# GITHUB_TOKEN=
-
-# GitHub 组织名（可选，默认推送到个人账户）
-# GITHUB_ORG=
-
-# HuggingFace 命名空间（可选，默认推送到个人账户）
-# HF_ORG=
-
-# HuggingFace 镜像端点（国内默认 hf-mirror，海外用户可设为空字符串）
-# HF_ENDPOINT=https://hf-mirror.com
-
-# ===== 行为选项 =====
-
-# 是否自动通过各阶段审批: true | false
-# true 时工作流全自动运行，不会在每个阶段暂停等待确认
 AUTO_APPROVE=false
-
-# 运行模式: full | dry-run
-# full    — 完整执行所有阶段
-# dry-run — 仅预览：扫描模型、检查环境、输出计划，不下载大文件也不编译
 MODE=full

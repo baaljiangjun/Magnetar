@@ -19,9 +19,17 @@ def load_config(project_root: Path | None = None) -> dict:
             if m: cfg[m.group(1)] = m.group(2).strip()
     for key in cfg:
         if os.environ.get(key): cfg[key] = os.environ[key]
-    cfg.setdefault("TARGET_HARDWARE", "AX650")
+    cfg.setdefault("TARGET_HARDWARE", "Hi3516CV610")
     cfg.setdefault("SDK_LANG", "both")
-    cfg.setdefault("BOARD_PASSWORD", os.environ.get("MAGNETAR_BOARD_PASSWORD", "123456"))
+    cfg.setdefault("BOARD_USER", "root")
+    cfg.setdefault("BOARD_PORT", "22")
+    cfg.setdefault("BOARD_PASSWORD", os.environ.get("MAGNETAR_BOARD_PASSWORD", ""))
+    cfg.setdefault("BOARD_TRANSPORT", "ssh")
+    cfg.setdefault("BOARD_SERIAL_PORT", "")
+    cfg.setdefault("BOARD_SERIAL_BAUD", "115200")
+    cfg.setdefault("ATC_BIN", "atc")
+    cfg.setdefault("MINDCMD_BIN", "mindcmd")
+    cfg.setdefault("LIBC", "musl")
     return cfg
 
 
@@ -43,6 +51,31 @@ def load_task_config(task_dir: Path | str, project_root: Path | None = None) -> 
         if os.environ.get(key):
             cfg[key] = os.environ[key]
     cfg.setdefault("TASK_DIR", str(task_dir))
-    cfg.setdefault("TARGET_HARDWARE", "AX650")
-    cfg.setdefault("BOARD_PASSWORD", os.environ.get("MAGNETAR_BOARD_PASSWORD", "123456"))
+    cfg.setdefault("TARGET_HARDWARE", "Hi3516CV610")
+    cfg.setdefault("BOARD_USER", "root")
+    cfg.setdefault("BOARD_PORT", "22")
+    cfg.setdefault("BOARD_PASSWORD", os.environ.get("MAGNETAR_BOARD_PASSWORD", ""))
+    cfg.setdefault("BOARD_TRANSPORT", "ssh")
+    cfg.setdefault("BOARD_SERIAL_PORT", "")
+    cfg.setdefault("BOARD_SERIAL_BAUD", "115200")
+    cfg.setdefault("ATC_BIN", "atc")
+    cfg.setdefault("MINDCMD_BIN", "mindcmd")
+    cfg.setdefault("LIBC", "musl")
     return cfg
+
+
+def require_serial_config(cfg: dict) -> tuple[str, int]:
+    """读取用户选择的串口配置；绝不猜测或默认使用某个 COM 口。"""
+    port = str(cfg.get("BOARD_SERIAL_PORT", "")).strip()
+    if not port:
+        raise ValueError(
+            "未配置 BOARD_SERIAL_PORT。请先询问用户板子当前连接的串口号"
+            "（例如 Windows 的 COM5 或 Linux 的 /dev/ttyUSB0），禁止默认使用 COM3。"
+        )
+    try:
+        baud = int(cfg.get("BOARD_SERIAL_BAUD", 115200))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("BOARD_SERIAL_BAUD 必须是整数，例如 115200") from exc
+    if baud <= 0:
+        raise ValueError("BOARD_SERIAL_BAUD 必须大于 0")
+    return port, baud

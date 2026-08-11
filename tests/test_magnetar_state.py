@@ -23,13 +23,13 @@ class MagnetarStateTest(unittest.TestCase):
             save(task_dir, model_name="demo")
             mark_stage(task_dir, "EXPORT", artifacts={"onnx": "export/model.onnx"},
                        metrics={"cosine": 0.99}, summary="EXPORT OK")
-            mark_stage(task_dir, "COMPILE", artifacts={"axmodel": "compile/model.axmodel"},
+            mark_stage(task_dir, "COMPILE", artifacts={"om": "compile/model.om"},
                        metrics={"size_kb": 12.3}, summary="COMPILE OK")
 
             state = load(task_dir)
             self.assertEqual(state["stage"], "COMPILE")
             self.assertEqual(state["artifacts"]["onnx"], "export/model.onnx")
-            self.assertEqual(state["artifacts"]["axmodel"], "compile/model.axmodel")
+            self.assertEqual(state["artifacts"]["om"], "compile/model.om")
             self.assertEqual(state["metrics"]["cosine"], 0.99)
             self.assertEqual(state["metrics"]["size_kb"], 12.3)
             self.assertIn("updated_at", state)
@@ -61,11 +61,10 @@ class MagnetarStateTest(unittest.TestCase):
                 "FATAL: build aborted\n",
                 encoding="utf-8",
             )
-            (compile_dir / "model.axmodel").write_bytes(b"x" * 4096)
+            (compile_dir / "model.om").write_bytes(b"x" * 4096)
 
             summary = summarize_compile_log(task_dir)
             self.assertEqual(summary["size_bytes"], 4096)
-            self.assertIn("123.45", summary["macs"])
             self.assertTrue(any("quantize failed" in e for e in summary["errors"]))
             self.assertTrue(any("FATAL" in e for e in summary["errors"]))
             self.assertLessEqual(len(summary["tail"]), 1500)

@@ -167,13 +167,13 @@ echo "Installed Magnetar skill:"
 echo "  source: $skill_src"
 echo "  target: $skill_dst"
 echo
-echo "接下来请安装 Pulsar2 编译环境:"
-echo "  ./scripts/install_pulsar2.sh"
+echo "接下来请安装与 Hi3516CV610 SDK 匹配的 CANN/ATC、MindCmd 和交叉编译器，"
+echo "然后 source CANN 的 setenv.sh。"
 echo
 echo "Try it with:"
-echo '  Use $magnetar to convert SOURCE to an AXMODEL package with Python and C++ SDKs.'
+echo '  Use $magnetar to convert SOURCE to a Hi3516CV610 OM package.'
 
 if [ "$DEPS_OK" -ne 0 ]; then
     echo ""
-    echo -e "${YELLOW}注意: 部分依赖缺失，Pulsar2 编译和 C++ SDK 构建可能失败。${NC}"
+    echo -e "${YELLOW}注意: 部分依赖缺失，ATC/MindCmd 或 CV610 C++ SDK 构建可能失败。${NC}"
 fi

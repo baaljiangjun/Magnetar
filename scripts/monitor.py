@@ -37,7 +37,7 @@ STAGES = [
     ("INIT",      "初始化工作目录"),
     ("EXPORT",    "导出静态ONNX"),
     ("TOOLCHAIN", "准备编译工具链"),
-    ("COMPILE",   "Pulsar2 编译"),
+    ("COMPILE",   "ATC 编译"),
     ("SIMULATE",  "仿真精度对分"),
     ("SDK-GEN",   "生成 Python/C++ SDK"),
     ("RUNONBOARD","板端验证"),
@@ -201,16 +201,16 @@ def _get_detail(task_dir: str, stage_name: str) -> str:
         return f"ONNX: {_file_size_mb(onnx)}" if os.path.isfile(onnx) else ""
 
     if stage_name == "TOOLCHAIN":
-        # Pulsar2 状态
+        # CV610 OM 状态
         cmake = os.path.join(task_dir, "sdk/cpp/toolchain-aarch64.cmake")
         return "工具链就绪" if os.path.isfile(cmake) else ""
 
     if stage_name == "COMPILE":
-        axmodel = os.path.join(task_dir, "compile/model.axmodel")
+        om_model = os.path.join(task_dir, "compile/model.om")
         report = os.path.join(task_dir, "compile/compile_report.md")
         parts = []
-        if os.path.isfile(axmodel):
-            parts.append(f"AXMODEL: {_file_size_kb(axmodel)}")
+        if os.path.isfile(om_model):
+            parts.append(f"OM: {_file_size_kb(om_model)}")
         m = _grep_first(report, r"MACs.*?(\d+\.?\d*)\s*G")
         if m:
             parts.append(f"MACs: {m} G")
@@ -276,7 +276,7 @@ def _infer_completed(task_dir: str, stage_name: str) -> str:
     checks = {
         "ACQUIRE":    "cache/acquire/manifest.json",
         "EXPORT":     "export/model.onnx",
-        "COMPILE":    "compile/model.axmodel",
+        "COMPILE":    "compile/model.om",
         "SIMULATE":   "simulate/simulate_report.md",
         "SDK-GEN":    "sdk/sdk_report.md",
         "RUNONBOARD": "runonboard/runonboard_report.md",
@@ -389,10 +389,10 @@ def _build_metrics_table(task_dir: str, statuses: list) -> Table:
             table.add_row("ONNX", f"{os.path.getsize(p)/1024/1024:.1f} MB")
 
     if ok("COMPILE"):
-        ap = os.path.join(task_dir, "compile/model.axmodel")
+        ap = os.path.join(task_dir, "compile/model.om")
         onp = os.path.join(task_dir, "export/model.onnx")
         if os.path.isfile(ap):
-            table.add_row("AXMODEL", f"{os.path.getsize(ap)/1024:.0f} KB")
+            table.add_row("OM", f"{os.path.getsize(ap)/1024:.0f} KB")
         if os.path.isfile(onp) and os.path.isfile(ap):
             r = os.path.getsize(onp) / max(os.path.getsize(ap), 1)
             table.add_row("压缩比", f"{r:.1f}:1")

@@ -1,213 +1,104 @@
-"""COMPILE: Pulsar2 编译 ONNX → AXMODEL。
+"""COMPILE: convert a static ONNX model to Hi3516CV610 OM with ATC."""
+from __future__ import annotations
 
-v2: 编译前自动校验配置，打印参数速查表辅助排查。
-    支持直接传入 custom config JSON 覆盖默认配置。
-    summarize_compile_log(): 从 compile.log 提取关键指标，Agent 汇报专用。
-"""
-import json, re, sys
+import json
+import os
+import re
+import shlex
 from pathlib import Path
 
+from magnetar.config import load_task_config
+from magnetar.cv610_util import resolve_tool, run_command
 
-def _build_config(task_dir: Path, target_hw: str, pulsar_image: str,
-                  input_dtype: str = "FP32", custom_config: dict | None = None) -> dict:
-    """从 model_meta.json 构建 Pulsar2 编译配置，custom_config 可覆盖任意字段。
 
-    Args:
-        input_dtype: Pulsar2 proto DataType 名 (FP32/U8/S8/FP16...)
-        custom_config: 可选的用户覆盖配置 dict，顶级 key 直接合并
-    """
-    from magnetar.docker_util import get_pulsar2_proto_enums_cached
+def _shape_spec(meta: dict) -> str:
+    specs = []
+    for item in meta.get("inputs", []):
+        shape = item.get("shape", [])
+        if not shape or any(not isinstance(v, int) or v <= 0 for v in shape):
+            raise ValueError(f"CV610 ATC 要求静态输入 Shape，当前为 {item.get('name')}: {shape}")
+        specs.append(f"{item['name']}:{','.join(map(str, shape))}")
+    if not specs:
+        raise ValueError("model_meta.json 中没有输入信息")
+    return ";".join(specs)
 
+
+def build_atc_command(task_dir: Path, *, atc_bin: str = "atc",
+                      custom_args: list[str] | None = None) -> list[str]:
     meta = json.loads((task_dir / "export" / "model_meta.json").read_text(encoding="utf-8"))
-    enums = get_pulsar2_proto_enums_cached(pulsar_image)
-    dt = enums["DataType"]
-
-    if input_dtype not in dt:
-        valid = [k for k in dt if not k.startswith("Default")]
-        raise ValueError(f"input_dtype '{input_dtype}' 不在 Pulsar2 DataType 中。可选: {valid}")
-
-    input_info = meta["inputs"][0]
-    input_name = input_info["name"]
-    input_shape = input_info["shape"]
-    input_layout = input_info.get("layout", "NCHW")
-
-    shape_str = "x".join(str(d) for d in input_shape)
-    input_shapes = f"{input_name}:{shape_str}"
-
-    # 校准配置参照原始 yolov8l_ylb.json
-    if input_dtype == "U8":
-        calib_mean, calib_std = [0, 0, 0], [255, 255, 255]
-        src_layout = "NHWC"
-    else:
-        calib_mean, calib_std = [], []
-        src_layout = input_layout
-
-    config = {
-        "input": "/workspace/export/model.onnx",
-        "output_dir": "/workspace/compile",
-        "output_name": "model.axmodel",
-        "work_dir": "/workspace/compile/work",
-        "model_type": "ONNX",
-        "target_hardware": target_hw,
-        "npu_mode": "NPU1",
-        "input_shapes": input_shapes,
-        "onnx_opt": {
-            "disable_onnx_optimization": False,
-            "enable_onnxsim": False,
-            "model_check": True,
-        },
-        "quant": {
-            "input_configs": [{
-                "tensor_name": input_name,
-                "calibration_dataset": "/workspace/export/calib_data/input.tar.gz",
-                "calibration_format": "Numpy",
-                "calibration_size": 30,
-                "calibration_mean": calib_mean,
-                "calibration_std": calib_std,
-            }],
-            "calibration_method": "MinMax",
-            "precision_analysis": True,
-            "precision_analysis_method": "EndToEnd",
-            "highest_mix_precision": False,
-        },
-        "input_processors": [{
-            "tensor_name": input_name,
-            "tensor_format": "RGB",
-            "tensor_layout": input_layout,
-            "src_format": "RGB",
-            "src_dtype": input_dtype,
-            "src_layout": src_layout,
-        }],
-    }
-
-    if custom_config:
-        for k, v in custom_config.items():
-            if k in config and isinstance(config[k], dict) and isinstance(v, dict):
-                config[k].update(v)
-            else:
-                config[k] = v
-
-    return config
+    cfg = load_task_config(task_dir)
+    cmd = [
+        atc_bin,
+        "--mode=0",
+        "--framework=5",
+        f"--model={task_dir / 'export' / 'model.onnx'}",
+        f"--output={task_dir / 'compile' / 'model'}",
+        f"--input_shape={_shape_spec(meta)}",
+        "--soc_version=Hi3516CV610",
+        "--workbuf_optimize_enable=1",
+    ]
+    aipp = cfg.get("AIPP_CONFIG")
+    if aipp:
+        cmd.append(f"--insert_op_conf={Path(aipp).expanduser().resolve()}")
+    quant = cfg.get("QUANT_PARAM_FILE")
+    if quant:
+        cmd.append(f"--quant_param_file={Path(quant).expanduser().resolve()}")
+    extra = custom_args
+    if extra is None and cfg.get("ATC_EXTRA_ARGS"):
+        extra = shlex.split(cfg["ATC_EXTRA_ARGS"])
+    cmd.extend(extra or [])
+    return cmd
 
 
-def _validate_and_warn(config: dict, image: str, task_dir: Path):
-    """编译前校验 Pulsar2 配置，打印警告和参考信息。"""
-    from magnetar.pulsar2_ref import validate_config, get_enums, print_calib_cheatsheet
-
-    enums = get_enums(image)
-    warnings = validate_config(config, enums)
-
-    if warnings:
-        print("\n" + "=" * 60)
-        print("  ⚠ Pulsar2 配置校验发现问题:")
-        print("=" * 60)
-        for w in warnings:
-            print(f"  ❌ {w}")
-        print()
-        print("  💡 可用选项速查:")
-        print_calib_cheatsheet(enums)
-        print()
-        print("  💡 生成参考配置: python magnetar/pulsar2_ref.py --save")
-        print()
-
-        # Generate a reference config for this hardware
-        from magnetar.pulsar2_ref import generate_reference_config
-        ref = generate_reference_config(enums, config.get("target_hardware", "AX650"))
-        ref_path = task_dir / "pulsar2_reference_config.json"
-        ref_path.write_text(ref)
-        print(f"  📄 参考配置已保存: {ref_path}")
-
-    return len(warnings) == 0
-
-
-def run(task_dir: Path, target_hw: str, pulsar_image: str,
-        input_dtype: str = "FP32", custom_config: dict | None = None,
-        skip_validation: bool = False) -> None:
-    from magnetar.docker_util import docker_pulsar2
-
-    compile_dir = task_dir / "compile"
-    compile_dir.mkdir(parents=True, exist_ok=True)
-
-    config = _build_config(task_dir, target_hw, pulsar_image, input_dtype, custom_config)
-
-    # Pre-build validation
-    if not skip_validation:
-        ok = _validate_and_warn(config, pulsar_image, task_dir)
-        if not ok:
-            resp = input("\n  ⚠ 配置有警告，是否继续编译？[y/N] ")
-            if resp.lower() != "y":
-                print("  已取消编译。请修正配置后重试。")
-                sys.exit(1)
-
-    config_path = compile_dir / "pulsar2_config.json"
-    config_path.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
-    print(f"[COMPILE] input_dtype={input_dtype}  input_shapes={config['input_shapes']}")
-
-    docker_pulsar2(
-        pulsar_image, str(task_dir.resolve()),
-        "pulsar2 build --config /workspace/compile/pulsar2_config.json",
-        timeout=3600,
-        log_file=compile_dir / "compile.log",
-    )
-
-    axmodel = compile_dir / "model.axmodel"
-    if not axmodel.is_file():
+def run(task_dir: Path, target_hw: str = "Hi3516CV610", toolchain=None,
+        custom_args: list[str] | None = None, **_ignored) -> Path:
+    if target_hw.lower() not in {"hi3516cv610", "cv610"}:
+        raise ValueError(f"此分支仅支持 Hi3516CV610，收到 {target_hw}")
+    task_dir = Path(task_dir)
+    out = task_dir / "compile"
+    out.mkdir(parents=True, exist_ok=True)
+    cfg = load_task_config(task_dir)
+    configured = toolchain.get("atc") if isinstance(toolchain, dict) else cfg.get("ATC_BIN")
+    atc = resolve_tool("atc", configured)
+    cmd = build_atc_command(task_dir, atc_bin=atc, custom_args=custom_args)
+    (out / "atc_command.txt").write_text(shlex.join(cmd) + "\n", encoding="utf-8")
+    run_command(cmd, timeout=3600, log_file=out / "compile.log")
+    om = out / "model.om"
+    if not om.is_file():
         summary = summarize_compile_log(task_dir)
-        from magnetar.stages.state import mark_stage
-        mark_stage(
-            task_dir, "COMPILE", status="blocked",
-            metrics={"compile_errors": summary.get("errors", [])},
-            summary=f"COMPILE 失败，见 compile/compile.log 摘要: {summary.get('errors', [])[:2]}",
-        )
-        raise RuntimeError(f"Pulsar2 未生成 {axmodel}")
-
-    size_kb = axmodel.stat().st_size / 1024
-    (compile_dir / "compile_report.md").write_text(
-        f"# Compile Report\n\n"
-        f"- image: {pulsar_image}\n"
-        f"- target: {target_hw}\n"
-        f"- input: {config['input_shapes']}\n"
-        f"- src_dtype: {input_dtype}\n"
-        f"- size: {size_kb:.1f} KB\n",
+        raise RuntimeError(f"ATC 未生成 {om}；错误摘要: {summary['errors'][:3]}")
+    report = {
+        "target": "Hi3516CV610",
+        "model": str(om),
+        "size_bytes": om.stat().st_size,
+        "atc_command": shlex.join(cmd),
+    }
+    (out / "compile_report.md").write_text(
+        "# CV610 ATC Compile Report\n\n" +
+        "\n".join(f"- {k}: `{v}`" for k, v in report.items()) + "\n",
         encoding="utf-8",
     )
     from magnetar.stages.state import mark_stage
-    mark_stage(
-        task_dir, "COMPILE",
-        artifacts={"axmodel": str(axmodel)},
-        metrics={"axmodel_size_kb": size_kb},
-        summary=f"COMPILE OK axmodel={size_kb:.1f} KB",
-    )
-    print(f"[COMPILE] Done. model.axmodel = {size_kb:.1f} KB")
+    mark_stage(task_dir, "COMPILE", artifacts={"om": str(om)},
+               metrics={"om_size_kb": om.stat().st_size / 1024},
+               summary=f"COMPILE OK om={om.stat().st_size / 1024:.1f} KB")
+    return om
 
 
 def summarize_compile_log(task_dir: Path) -> dict:
-    """从 compile/compile.log 提取关键指标（MACs/大小/错误行），禁止 Agent 全量读日志。"""
-    log_path = Path(task_dir) / "compile" / "compile.log"
-    result: dict = {"macs": None, "size_bytes": None, "errors": [], "tail": ""}
-    if not log_path.is_file():
+    log = Path(task_dir) / "compile" / "compile.log"
+    result = {"size_bytes": None, "errors": [], "tail": ""}
+    om = Path(task_dir) / "compile" / "model.om"
+    if om.is_file():
+        result["size_bytes"] = om.stat().st_size
+    if not log.is_file():
         result["errors"] = ["compile.log 不存在"]
         return result
-    text = log_path.read_text(encoding="utf-8", errors="replace")
-    axmodel = Path(task_dir) / "compile" / "model.axmodel"
-    result["size_bytes"] = axmodel.stat().st_size if axmodel.is_file() else None
-
-    for pattern, key in [
-        (r"[Mm][Aa][Cc][Ss]?[\s:=]*([\d.]+[eE]?[\d.]*)", "macs"),
-    ]:
-        matches = re.findall(pattern, text)
-        if matches:
-            result[key] = matches[-1]
-
-    seen = set()
+    text = log.read_text(encoding="utf-8", errors="replace")
     for line in text.splitlines():
-        low = line.lower()
-        if any(k in low for k in ("error", "failed", "exception", "fatal")) and "errorcode" not in low:
-            trimmed = line.strip()[:240]
-            if trimmed and trimmed not in seen:
-                seen.add(trimmed)
-                result["errors"].append(trimmed)
-        if len(result["errors"]) >= 8:
-            break
+        if re.search(r"error|failed|exception|fatal", line, re.I):
+            result["errors"].append(line.strip()[:240])
+            if len(result["errors"]) >= 8:
+                break
     result["tail"] = text[-1500:]
     return result

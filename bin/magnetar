@@ -15,7 +15,7 @@ PROJECT_ROOT="$(pwd)"
 
 usage() {
     cat <<EOF
-magnetar — AI 模型到 AX 芯片一键部署 CLI
+magnetar — AI 模型到 Hi3516CV610 一键部署 CLI
 
 用法:
   ./magnetar <命令>
@@ -28,7 +28,7 @@ magnetar — AI 模型到 AX 芯片一键部署 CLI
   report     生成自包含 HTML 仪表盘报告
   run        输出 Codex 启动提示，开始模型部署
   dry-run    预览模式：扫描模型、输出计划，不执行实际转换
-  install    安装 Pulsar2 Docker 编译环境
+  toolchain  检查 ATC、MindCmd 和 CV610 交叉编译器
   help       显示本帮助
 
 示例:
@@ -78,13 +78,8 @@ cmd_check() {
     echo -e "${CYAN}=== 环境依赖 ===${NC}"
     check_dep git || all_ok=1
     check_dep python3 "apt install python3" || all_ok=1
-    check_dep uv "curl -LsSf https://astral.sh/uv/install.sh | sh" || all_ok=1
-    if command -v docker &>/dev/null && docker info &>/dev/null 2>&1; then
-        echo -e "  ${GREEN}✓${NC} docker ($(docker --version | cut -d' ' -f3 | tr -d ','))"
-    else
-        echo -e "  ${YELLOW}⚠${NC} docker 未运行 — Pulsar2 编译需要"
-        all_ok=1
-    fi
+    check_dep atc "安装与 CV610 SDK 匹配的 CANN 并 source setenv.sh" || all_ok=1
+    check_dep mindcmd "安装与 CV610 SDK 匹配的 MindCmd" || all_ok=1
     check_dep cmake "apt install cmake" || all_ok=1
     echo ""
 
@@ -108,13 +103,8 @@ cmd_check() {
     fi
     echo ""
 
-    echo -e "${CYAN}=== Pulsar2 ===${NC}"
-    local pulsar2_img="${PULSAR2_IMAGE:-pulsar2:6.0}"
-    if docker image inspect "$pulsar2_img" &>/dev/null 2>&1; then
-        echo -e "  ${GREEN}✓${NC} Pulsar2 Docker 镜像已加载 ($pulsar2_img)"
-    else
-        echo -e "  ${YELLOW}⚠${NC} Pulsar2 未安装 — 运行 './magnetar install'"
-    fi
+    echo -e "${CYAN}=== CV610 Toolchain ===${NC}"
+    check_dep "${CROSS_COMPILE:-arm-v01c02-linux-musleabi-}gcc" "安装 CV610 32-bit ARM toolchain" || all_ok=1
     echo ""
 
     echo -e "${CYAN}=== Git 状态 ===${NC}"
@@ -184,12 +174,12 @@ cmd_run() {
         else
             echo "  \$magnetar"
             echo "  SOURCE=<你的模型路径>"
-            echo "  TARGET_HARDWARE=AX650"
+            echo "  TARGET_HARDWARE=Hi3516CV610"
         fi
     else
         echo "  \$magnetar"
         echo "  SOURCE=<模型路径/Git URL/HuggingFace repo>"
-        echo "  TARGET_HARDWARE=AX650"
+        echo "  TARGET_HARDWARE=Hi3516CV610"
         echo ""
         echo "或先运行 './magnetar init' 创建配置文件。"
     fi
@@ -203,18 +193,11 @@ cmd_dry_run() {
     echo "  \$magnetar --dry-run"
     echo ""
     echo "这将扫描模型文件、检查环境依赖、输出执行计划，"
-    echo "但不会下载大文件（BSP SDK、Docker 镜像）也不会编译。"
+        echo "但不会运行 ATC、MindCmd 或上板操作。"
     echo ""
 }
 
-cmd_install() {
-    if [[ -x "$REPO_ROOT/scripts/install_pulsar2.sh" ]]; then
-        exec "$REPO_ROOT/scripts/install_pulsar2.sh"
-    else
-        echo -e "${RED}未找到 install_pulsar2.sh${NC}"
-        return 1
-    fi
-}
+cmd_toolchain() { python3 -c 'from magnetar.stages.toolchain import run; run()'; }
 
 cmd_monitor() {
     local task_dir=""
@@ -268,7 +251,7 @@ case "$cmd" in
     report)     shift; cmd_report "$@" ;;
     run)        cmd_run ;;
     dry-run)    cmd_dry_run ;;
-    install)    cmd_install ;;
+    toolchain)  cmd_toolchain ;;
     help|--help|-h) usage ;;
     *)
         echo -e "${RED}未知命令: $cmd${NC}"
