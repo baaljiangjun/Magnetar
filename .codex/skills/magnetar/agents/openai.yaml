@@ -1,4 +1,4 @@
 interface:
   display_name: "Magnetar"
-  short_description: "Convert CV models to Hi3516CV610 OM packages"
-  default_prompt: "Use $magnetar to convert SOURCE to a Hi3516CV610 OM package with MindCmd validation and an SVP_ACL C++ integration."
+  short_description: "Convert CV models for reliable Hi3516CV610 deployment"
+  default_prompt: "Use $magnetar to convert and validate a CV model for Hi3516CV610, then generate and test the SVP_ACL SDK."
